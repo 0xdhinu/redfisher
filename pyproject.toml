@@ -1,0 +1,16 @@
+# This file is for IDE support only.
+# The extension itself is loaded directly by Burp Suite via Jython — no pip install needed.
+
+[project]
+name = "redfisher"
+version = "1.0.0"
+description = "Burp Suite extension for Redfish API testing"
+requires-python = ">=2.7"
+
+[tool.ruff]
+line-length = 100
+target-version = "py27"
+
+[tool.ruff.lint]
+# Ignore F821 (undefined name) — 'unicode' is a Jython 2.7 builtin
+ignore = ["F821"]

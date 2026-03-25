@@ -1,0 +1,253 @@
+{
+  "version": "1.0",
+  "signatures": [
+    {
+      "id": "REDFISH-P01",
+      "name": "[Redfisher] Redfish API over unencrypted HTTP",
+      "type": "passive",
+      "severity": "High",
+      "confidence": "Certain",
+      "enabled": true,
+      "check_type": "http_protocol",
+      "description": "Redfish API traffic was observed over plain HTTP. Authentication tokens and credentials are transmitted in cleartext.",
+      "background": "The Redfish specification requires HTTPS for all API communication. HTTP exposes X-Auth-Token headers and Basic auth credentials to network-level attackers.",
+      "remediation": "Configure the BMC to only accept HTTPS. Disable HTTP on the management interface.",
+      "config": {}
+    },
+    {
+      "id": "REDFISH-P02",
+      "name": "[Redfisher] Session token exposed in response body",
+      "type": "passive",
+      "severity": "Low",
+      "confidence": "Firm",
+      "enabled": true,
+      "check_type": "response_body_contains",
+      "description": "The response body contains a literal X-Auth-Token key. Tokens should only appear in response headers, not in the JSON body.",
+      "background": "Redfish session tokens returned in JSON bodies may be logged by proxies and application layers that capture response bodies but not headers.",
+      "remediation": "Return session tokens only via the X-Auth-Token response header.",
+      "config": {
+        "match": "\"X-Auth-Token\""
+      }
+    },
+    {
+      "id": "REDFISH-P03",
+      "name": "[Redfisher] Sensitive fields exposed in Redfish response",
+      "type": "passive",
+      "severity": "High",
+      "confidence": "Certain",
+      "enabled": true,
+      "check_type": "sensitive_fields",
+      "description": "The response contains sensitive field(s) with non-null values. These fields should be omitted or masked in GET responses.",
+      "background": "Redfish compliant implementations must not return plaintext passwords, private keys, or authentication credentials in GET responses.",
+      "remediation": "Return null for sensitive fields in read responses. Only accept them as write-only inputs.",
+      "config": {
+        "fields": [
+          "Password", "OldPassword", "NewPassword", "Token",
+          "PrivateKey", "CertificateString", "Passphrase",
+          "SNMPv3AuthenticationKey", "SNMPv3EncryptionKey"
+        ]
+      }
+    },
+    {
+      "id": "REDFISH-P04",
+      "name": "[Redfisher] Missing security headers on Redfish response",
+      "type": "passive",
+      "severity": "Low",
+      "confidence": "Certain",
+      "enabled": true,
+      "check_type": "missing_headers",
+      "description": "The Redfish response is missing one or more security headers.",
+      "background": "Security headers prevent browser-based attacks such as MIME-type sniffing and clickjacking.",
+      "remediation": "Add the missing security headers to all Redfish API responses.",
+      "config": {
+        "headers": ["X-Content-Type-Options", "X-Frame-Options", "Cache-Control"]
+      }
+    },
+    {
+      "id": "REDFISH-P05",
+      "name": "[Redfisher] Session token in URL",
+      "type": "passive",
+      "severity": "High",
+      "confidence": "Firm",
+      "enabled": true,
+      "check_type": "url_contains",
+      "description": "A potential session token was detected in the URL query string. Tokens in URLs are stored in browser history, server logs, and proxy access logs.",
+      "background": "Tokens must be transmitted in headers, never in URLs.",
+      "remediation": "Pass the X-Auth-Token in the request header, not in the URL.",
+      "config": {
+        "match": ["token=", "auth_token=", "x-auth-token="]
+      }
+    },
+    {
+      "id": "REDFISH-P06",
+      "name": "[Redfisher] Credentials transmitted over HTTP",
+      "type": "passive",
+      "severity": "High",
+      "confidence": "Certain",
+      "enabled": true,
+      "check_type": "cleartext_credentials",
+      "description": "A Redfish session creation request contains a Password field and is transmitted over unencrypted HTTP.",
+      "background": "Credentials POSTed to the session endpoint over HTTP are exposed to any network observer.",
+      "remediation": "Enforce HTTPS on the Redfish management interface.",
+      "config": {}
+    },
+    {
+      "id": "REDFISH-P07",
+      "name": "[Redfisher] OData debug information exposed",
+      "type": "passive",
+      "severity": "Low",
+      "confidence": "Firm",
+      "enabled": true,
+      "check_type": "response_body_contains",
+      "description": "The response contains OData debug or error detail information that may expose internal system paths or stack traces.",
+      "background": "Verbose OData error messages can reveal internal implementation details useful to an attacker.",
+      "remediation": "Configure the Redfish service to return minimal error detail in production.",
+      "config": {
+        "match": "@Message.ExtendedInfo"
+      }
+    },
+    {
+      "id": "REDFISH-P08",
+      "name": "[Redfisher] Redfish version information disclosed",
+      "type": "passive",
+      "severity": "Info",
+      "confidence": "Certain",
+      "enabled": true,
+      "check_type": "response_header_contains",
+      "description": "The server response header exposes the software version of the management firmware.",
+      "background": "Version disclosure allows attackers to target known vulnerabilities for the specific firmware version.",
+      "remediation": "Suppress or genericise the Server response header.",
+      "config": {
+        "header": "Server",
+        "match": ""
+      }
+    },
+    {
+      "id": "REDFISH-A01",
+      "name": "[Redfisher] Unauthenticated access to Redfish endpoint",
+      "type": "active",
+      "severity": "High",
+      "confidence": "Certain",
+      "enabled": true,
+      "check_type": "unauthenticated_access",
+      "description": "The Redfish endpoint returned a success response when accessed without any authentication headers. Expected 401 or 403.",
+      "background": "All Redfish endpoints except the Service Root require authentication. Access without credentials should always return 401 Unauthorized.",
+      "remediation": "Configure the BMC to require authentication on all Redfish endpoints. Verify session handling rules are applied globally.",
+      "config": {}
+    },
+    {
+      "id": "REDFISH-A02",
+      "name": "[Redfisher] Default credentials accepted",
+      "type": "active",
+      "severity": "High",
+      "confidence": "Certain",
+      "enabled": true,
+      "check_type": "default_credentials",
+      "description": "The Redfish session endpoint accepted a well-known default credential pair.",
+      "background": "Default factory credentials are a well-known attack vector for BMC/management controllers. Attackers routinely scan for these credentials on internal networks.",
+      "remediation": "Change all default credentials immediately after deployment. Enforce a strong password policy and disable default accounts where possible.",
+      "config": {
+        "credentials": [
+          {"username": "admin",         "password": "admin",        "vendor": "generic"},
+          {"username": "admin",         "password": "password",     "vendor": "generic"},
+          {"username": "root",          "password": "root",         "vendor": "generic"},
+          {"username": "Administrator", "password": "password",     "vendor": "generic"},
+          {"username": "root",          "password": "calvin",       "vendor": "dell"},
+          {"username": "admin",         "password": "calvin",       "vendor": "dell"},
+          {"username": "Administrator", "password": "",             "vendor": "hpe"},
+          {"username": "admin",         "password": "admin",        "vendor": "hpe"},
+          {"username": "root",          "password": "0penBmc",      "vendor": "openbmc"},
+          {"username": "root",          "password": "OpenBmc",      "vendor": "openbmc"},
+          {"username": "ADMIN",         "password": "ADMIN",        "vendor": "supermicro"},
+          {"username": "admin",         "password": "ADMIN",        "vendor": "supermicro"},
+          {"username": "admin",         "password": "1234",         "vendor": "generic"},
+          {"username": "admin",         "password": "Admin1234!",   "vendor": "generic"},
+          {"username": "sysadmin",      "password": "superuser",    "vendor": "ami"},
+          {"username": "admin",         "password": "admin123",     "vendor": "generic"}
+        ]
+      }
+    },
+    {
+      "id": "REDFISH-P08",
+      "name": "[Redfisher] Auth token in URL query string",
+      "type": "passive",
+      "severity": "High",
+      "confidence": "Certain",
+      "enabled": true,
+      "check_type": "token_in_url",
+      "description": "An authentication token was found in the URL query string. Tokens in URLs are logged by web servers, proxies, and browser history.",
+      "background": "Redfish tokens should only be transmitted in the X-Auth-Token request header, never in URLs.",
+      "remediation": "Remove token from URL and transmit only via X-Auth-Token header.",
+      "config": {}
+    },
+    {
+      "id": "REDFISH-P09",
+      "name": "[Redfisher] BIOS attributes with sensitive data exposed",
+      "type": "passive",
+      "severity": "High",
+      "confidence": "Firm",
+      "enabled": true,
+      "check_type": "bios_attributes_exposed",
+      "description": "BIOS attributes endpoint returned fields with names suggesting password, key, or credential data with non-null values.",
+      "background": "Some BMC implementations return BIOS passwords or NVMe keys in /Bios/Attributes responses. This constitutes plaintext credential exposure.",
+      "remediation": "Ensure sensitive BIOS attributes are masked or omitted from GET responses. Apply role-based access restrictions to Bios endpoints.",
+      "config": {}
+    },
+    {
+      "id": "REDFISH-P10",
+      "name": "[Redfisher] Firmware HTTP upload URI exposed",
+      "type": "passive",
+      "severity": "Medium",
+      "confidence": "Certain",
+      "enabled": true,
+      "check_type": "firmware_push_uri",
+      "description": "The UpdateService response contains an HttpPushUri field, exposing a firmware upload endpoint.",
+      "background": "If firmware upload does not require signed images or enforce role-based access, an attacker with credentials can flash malicious firmware.",
+      "remediation": "Ensure firmware upload requires Administrator role, validates digital signatures, and logs all attempts.",
+      "config": {}
+    },
+    {
+      "id": "REDFISH-P11",
+      "name": "[Redfisher] BMC version disclosed in Server header",
+      "type": "passive",
+      "severity": "Info",
+      "confidence": "Certain",
+      "enabled": true,
+      "check_type": "server_banner",
+      "description": "The Server response header reveals the BMC vendor and/or firmware version, aiding targeted attacks.",
+      "background": "Banner information helps attackers select version-specific exploits and known CVEs without needing additional reconnaissance.",
+      "remediation": "Configure the BMC to suppress or genericise the Server header.",
+      "config": {
+        "keywords": ["iDRAC", "iLO", "OpenBMC", "MegaRAC", "Redfish", "XCC", "iRMC", "CIMC"]
+      }
+    },
+    {
+      "id": "REDFISH-A03",
+      "name": "[Redfisher] Privilege escalation via PATCH account role",
+      "type": "active",
+      "severity": "Critical",
+      "confidence": "Firm",
+      "enabled": true,
+      "check_type": "privilege_escalation",
+      "description": "A PATCH request to an account URL successfully changed the RoleId to Administrator, indicating missing authorisation enforcement.",
+      "background": "Redfish AccountService must restrict role modification to Administrator-privileged sessions. If unprivileged users can escalate their role, full BMC compromise follows.",
+      "remediation": "Enforce role-based access control on PATCH /AccountService/Accounts/{id}. Return 403 for non-admin role change attempts.",
+      "config": {}
+    },
+    {
+      "id": "REDFISH-A04",
+      "name": "[Redfisher] Unauthenticated session creation",
+      "type": "active",
+      "severity": "Critical",
+      "confidence": "Certain",
+      "enabled": true,
+      "check_type": "unauth_post_session",
+      "description": "A session token was issued in response to a POST request that contained no authentication headers.",
+      "background": "The SessionService/Sessions endpoint must validate credentials before issuing tokens. Unauthenticated session creation bypasses all BMC access controls.",
+      "remediation": "Require valid UserName/Password credentials and return 401 for missing or invalid credentials.",
+      "config": {
+        "credentials": [{"username": "test", "password": "test"}]
+      }
+    }
+  ]
+}

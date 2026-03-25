@@ -1,0 +1,20 @@
+# Python / Jython bytecode
+*.pyc
+*$py.class
+__pycache__/
+
+# IDEs
+.idea/
+.vscode/
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
