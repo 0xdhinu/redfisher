@@ -148,6 +148,10 @@ class AITab(object):
         self._cmb_mode.addActionListener(lambda e: self._on_mode_change())
 
         btn_connect = JButton('Connect / Test')
+        btn_connect.setBackground(Color(230, 100, 0))
+        btn_connect.setForeground(Color.WHITE)
+        btn_connect.setOpaque(True)
+        btn_connect.setBorderPainted(False)
         btn_connect.addActionListener(lambda e: self._on_connect())
 
         self._lbl_conn_status = JLabel('Not connected.')
@@ -202,6 +206,11 @@ class AITab(object):
         btn_findings = JButton('Analyze Current Findings')
         btn_payload  = JButton('Generate Payload')
         btn_cve      = JButton('CVE Lookup (Firmware)')
+        for _b in (btn_url, btn_explorer, btn_findings, btn_payload, btn_cve):
+            _b.setBackground(Color(230, 100, 0))
+            _b.setForeground(Color.WHITE)
+            _b.setOpaque(True)
+            _b.setBorderPainted(False)
         btn_url.addActionListener(     lambda e: self._on_analyze_url())
         btn_explorer.addActionListener(lambda e: self._on_analyze_explorer())
         btn_findings.addActionListener(lambda e: self._on_analyze_findings())
@@ -260,6 +269,11 @@ class AITab(object):
 
         btn_refresh = JButton('Refresh Tools')
         btn_call    = JButton('Call Tool')
+        for _b in (btn_refresh, btn_call):
+            _b.setBackground(Color(230, 100, 0))
+            _b.setForeground(Color.WHITE)
+            _b.setOpaque(True)
+            _b.setBorderPainted(False)
         btn_refresh.addActionListener(lambda e: self._on_refresh_tools())
         btn_call.addActionListener(   lambda e: self._on_call_tool())
 
@@ -293,6 +307,11 @@ class AITab(object):
 
         btn_clear  = JButton('Clear')
         btn_import = JButton('Import Findings to Scanner')
+        for _b in (btn_clear, btn_import):
+            _b.setBackground(Color(230, 100, 0))
+            _b.setForeground(Color.WHITE)
+            _b.setOpaque(True)
+            _b.setBorderPainted(False)
         btn_clear.addActionListener( lambda e: self._txt_results.setText(''))
         btn_import.addActionListener(lambda e: self._on_import_findings())
 

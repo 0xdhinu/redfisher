@@ -21,7 +21,7 @@ from editor import RedfishEditorTabFactory
 from scanner import RedfishScannerCheck
 from auth_handler import RedfishAuthHandler
 
-EXTENSION_NAME = 'Redfisher \u2014 Redfish API Tester'
+EXTENSION_NAME = 'Redfisher API Tester'
 VERSION        = '1.0.0'
 
 # signatures.json lives one level above lib/

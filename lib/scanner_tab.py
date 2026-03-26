@@ -166,6 +166,11 @@ class ScannerTab(object):
         btn_save   = JButton('Save to File')
         btn_add    = JButton('Add New')
         btn_delete = JButton('Delete Selected')
+        for _b in (btn_reload, btn_save, btn_add, btn_delete):
+            _b.setBackground(Color(230, 100, 0))
+            _b.setForeground(Color.WHITE)
+            _b.setOpaque(True)
+            _b.setBorderPainted(False)
 
         btn_reload.addActionListener(lambda e: self._reload())
         btn_save.addActionListener(  lambda e: self._save())
@@ -183,6 +188,11 @@ class ScannerTab(object):
 
         btn_passive = JButton('Run Passive')
         btn_active  = JButton('Run Active')
+        for _b in (btn_passive, btn_active):
+            _b.setBackground(Color(230, 100, 0))
+            _b.setForeground(Color.WHITE)
+            _b.setOpaque(True)
+            _b.setBorderPainted(False)
         btn_passive.addActionListener(lambda e: self._run_scan('passive'))
         btn_active.addActionListener( lambda e: self._run_scan('active'))
         row1.add(btn_passive)
@@ -194,6 +204,11 @@ class ScannerTab(object):
 
         btn_exp_passive = JButton('Passive')
         btn_exp_active  = JButton('Active')
+        for _b in (btn_exp_passive, btn_exp_active):
+            _b.setBackground(Color(230, 100, 0))
+            _b.setForeground(Color.WHITE)
+            _b.setOpaque(True)
+            _b.setBorderPainted(False)
         btn_exp_passive.addActionListener(lambda e: self._run_scan_from_explorer('passive'))
         btn_exp_active.addActionListener( lambda e: self._run_scan_from_explorer('active'))
         row2.add(btn_exp_passive)
@@ -293,6 +308,11 @@ class ScannerTab(object):
         # Buttons
         btn_save   = JButton('Save Signature')
         btn_clear  = JButton('Clear Form')
+        for _b in (btn_save, btn_clear):
+            _b.setBackground(Color(230, 100, 0))
+            _b.setForeground(Color.WHITE)
+            _b.setOpaque(True)
+            _b.setBorderPainted(False)
         btn_save.addActionListener( lambda e: self._save_edit())
         btn_clear.addActionListener(lambda e: self._clear_edit())
 
@@ -337,6 +357,11 @@ class ScannerTab(object):
         btn_export_csv = JButton('Export CSV')
         btn_export_json = JButton('Export JSON')
         btn_export_md  = JButton('Export Markdown')
+        for _b in (btn_clear, btn_export_csv, btn_export_json, btn_export_md):
+            _b.setBackground(Color(230, 100, 0))
+            _b.setForeground(Color.WHITE)
+            _b.setOpaque(True)
+            _b.setBorderPainted(False)
         btn_clear.addActionListener(       lambda e: self._find_model.setRowCount(0))
         btn_export_csv.addActionListener(  lambda e: self._export_findings('csv'))
         btn_export_json.addActionListener( lambda e: self._export_findings('json'))

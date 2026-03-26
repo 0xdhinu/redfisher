@@ -214,7 +214,7 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
                 except Exception:
                     self._session_url = ''
                 self._log('Session created. Token: {0}...'.format(token[:8]))
-                self._set_status('Authenticated — session active.', 'ok')
+                self._set_status('Authenticated session active.', 'ok')
                 self._refresh_req_headers()
                 self._update_vendor_label(
                     ['{0}: {1}'.format(k, v) for k, v in resp.info().items()],
@@ -290,12 +290,12 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         outer.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4))
         self._tabs = JTabbedPane()
         self._tabs.addTab('Config',             self._build_config_tab())
-        self._tabs.addTab('Request / Response', self._build_repeater_tab())
+        self._tabs.addTab('Repeater', self._build_repeater_tab())
         self._tabs.addTab('Explorer',           self._build_explorer_tab())
         self._scanner_tab = ScannerTab(self)
         self._tabs.addTab('Scanner',            self._scanner_tab.get_panel())
         self._ai_tab = AITab(self)
-        self._tabs.addTab('AI / MCP',           self._ai_tab.get_panel())
+        self._tabs.addTab('AI Mode',           self._ai_tab.get_panel())
         self._cred_spray_tab = CredSprayTab(self)
         self._tabs.addTab('Cred Spray',         self._cred_spray_tab.get_panel())
         self._tabs.addTab('Log',                self._build_log_tab())
@@ -334,6 +334,11 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         self._btn_save   = JButton('Save config')
         self._btn_login  = JButton('Login (create session)')
         self._btn_logout = JButton('Logout (delete session)')
+        for _b in (self._btn_save, self._btn_login, self._btn_logout):
+            _b.setBackground(Color(230, 100, 0))
+            _b.setForeground(Color.WHITE)
+            _b.setOpaque(True)
+            _b.setBorderPainted(False)
         self._btn_save.addActionListener(  lambda e: self._on_save())
         self._btn_login.addActionListener( lambda e: self._on_login())
         self._btn_logout.addActionListener(lambda e: self._logout())
@@ -372,8 +377,13 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
 
         top_bar = JPanel(FlowLayout(FlowLayout.LEFT, 6, 4))
 
-        self._btn_hist_prev = JButton('\u25c0')  # ◀
-        self._btn_hist_next = JButton('\u25b6')  # ▶
+        self._btn_hist_prev = JButton('Back')
+        self._btn_hist_next = JButton('Forward')
+        for _b in (self._btn_hist_prev, self._btn_hist_next):
+            _b.setBackground(Color(230, 100, 0))
+            _b.setForeground(Color.WHITE)
+            _b.setOpaque(True)
+            _b.setBorderPainted(False)
         self._btn_hist_prev.setToolTipText('Previous request')
         self._btn_hist_next.setToolTipText('Next request')
         self._btn_hist_prev.addActionListener(lambda e: self._on_history_prev())
@@ -468,8 +478,13 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         panel.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8))
 
         # ---- top toolbar ----
-        self._btn_discover   = JButton('Discover  /redfish/v1/')
-        self._btn_auto_walk  = JButton('Auto-Walk Tree')
+        self._btn_discover   = JButton('Discover')
+        self._btn_auto_walk  = JButton('Spider')
+        for _b in (self._btn_discover, self._btn_auto_walk):
+            _b.setBackground(Color(230, 100, 0))
+            _b.setForeground(Color.WHITE)
+            _b.setOpaque(True)
+            _b.setBorderPainted(False)
         self._lbl_explorer_status = JLabel('')
         self._btn_discover.addActionListener(  lambda e: self._on_discover())
         self._btn_auto_walk.addActionListener( lambda e: self._on_auto_walk())
@@ -563,7 +578,7 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         """
         panel = JPanel(BorderLayout(4, 4))
         panel.setBorder(BorderFactory.createTitledBorder(
-            'OEM / JSON endpoint extractor — paste any response body'
+            'OEM / JSON endpoint extractor paste any response body'
         ))
 
         # text area for raw JSON input
@@ -580,7 +595,7 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
 
         # right-click menu on the extract list
         oem_popup          = JPopupMenu()
-        oem_send_repeater  = JMenuItem('Send to Request / Response tab')
+        oem_send_repeater  = JMenuItem('Send to Request tab')
         oem_send_scanner   = JMenuItem('Send to Scanner')
         oem_send_explorer  = JMenuItem('Add to Explorer')
         oem_send_repeater.addActionListener( lambda e: self._oem_send_to_repeater())
@@ -610,6 +625,11 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         btn_extract = JButton('Extract @odata.id links')
         btn_add     = JButton('Add selected to Explorer')
         btn_add_all = JButton('Add all to Explorer')
+        for _b in (btn_extract, btn_add, btn_add_all):
+            _b.setBackground(Color(230, 100, 0))
+            _b.setForeground(Color.WHITE)
+            _b.setOpaque(True)
+            _b.setBorderPainted(False)
         self._lbl_oem_status = JLabel('')
 
         btn_extract.addActionListener(lambda e: self._on_parse_oem_json())
@@ -639,6 +659,10 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         self._txt_log.setEditable(False)
 
         btn_clear = JButton('Clear log')
+        btn_clear.setBackground(Color(230, 100, 0))
+        btn_clear.setForeground(Color.WHITE)
+        btn_clear.setOpaque(True)
+        btn_clear.setBorderPainted(False)
         btn_clear.addActionListener(lambda e: self._txt_log.setText(''))
 
         btn_panel = JPanel(FlowLayout(FlowLayout.RIGHT))
@@ -1254,7 +1278,7 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         self._btn_auto_walk.setEnabled(False)
         self._btn_discover.setEnabled(False)
         self._lbl_explorer_status.setForeground(_STATUS_COLORS['neutral'])
-        self._lbl_explorer_status.setText('Auto-walking tree...')
+        self._lbl_explorer_status.setText('Spidering tree...')
 
         def work():
             return self._auto_walk_links()
@@ -1269,7 +1293,7 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
                 count = result
                 self._lbl_explorer_status.setForeground(_STATUS_COLORS['ok'])
                 self._lbl_explorer_status.setText(
-                    'Auto-walk done — {0} unique link(s).'.format(count)
+                    'Spider completed — {0} unique link(s).'.format(count)
                 )
 
         self._run_in_bg(work, done)
@@ -1320,7 +1344,7 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
                         depth[link] = current_depth + 1
                         queue.append(link)
             except Exception as ex:
-                self._log('Auto-walk error at {0}: {1}'.format(path, ex))
+                self._log('Spider error at {0}: {1}'.format(path, ex))
 
         return len(visited)
 
