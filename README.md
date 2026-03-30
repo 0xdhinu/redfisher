@@ -14,18 +14,22 @@ A Burp Suite extension (Jython 2.7) for penetration testing and security assessm
 
 ### Explorer Tab
 - One-click discovery of all `/redfish/v1/` endpoints via `@odata.id` traversal
-- **Auto-Walk Tree** — BFS traversal up to 3 levels deep, discovers up to 200 unique paths automatically
-- Inline response viewer (click any link to see the response without leaving the tab)
+- **Auto-Walk / Spider** — BFS traversal up to 3 levels deep, discovers up to 200 unique paths automatically
+- Inline response viewer — click any link to see the response without leaving the tab
 - Action link extraction — automatically detects `@Redfish.ActionInfo` and `target` links from responses and attaches them as child entries
 - OEM endpoint extraction — parses `Oem.<vendor>.Children` arrays and arbitrary JSON for hidden paths
-- Right-click context menu: Send to Request/Response, Send to Scanner
+- Right-click context menu: **Send to Repeater tab**, **Send to Scanner**
 
-### Request / Response Tab
+### Repeater Tab
 - Mini-Repeater with GET / POST / PATCH / DELETE / PUT / HEAD support
 - Quick path dropdown for common Redfish endpoints
-- **Request history** navigation (◀ ▶) — last 30 requests stored in session
+- **Request history** navigation (Back / Forward) — last 30 requests stored in session
 - Resource type and risk level display per URL
-- Orange Send button
+- **Right-click context menu on request body/headers** → **Send to Burp Repeater** — sends the current request (with active session token) directly to Burp Suite's native Repeater tab
+- **ActionInfo auto-fill** — when a GET response is a Redfish `ActionInfo` schema, the request body is automatically populated with a ready-to-submit JSON template, the method is switched to `POST`, and the URL is updated to the corresponding action endpoint:
+  - Required fields are marked as `"<required>"`
+  - Optional fields use type-appropriate defaults (`""`, `[]`, `0`, `false`, `{}`)
+  - Action URL inferred from `@odata.id` (e.g. `.../SubmitTestEventActionInfo` → `.../Actions/EventService.SubmitTestEvent`)
 
 ### Scanner Tab
 - Signature-driven passive and active scanning (integrates with Burp's scanner engine)
@@ -117,6 +121,32 @@ Three backend modes for AI-assisted analysis:
    - Add a rule action: **Run a post-request macro**
    - Or use **Invoke a Burp extension** → select `Redfisher: inject/refresh Redfish X-Auth-Token`
    - Set the scope to Redfish endpoints
+
+---
+
+## Usage Workflow
+
+### Testing an Action Endpoint
+1. Browse to an action's `ActionInfo` URL in the **Explorer** tab (e.g. `/redfish/v1/EventService/SubmitTestEventActionInfo`)
+2. Right-click → **Send to Repeater tab**
+3. In the **Repeater** tab, click **Send** (GET)
+4. The response body is detected as ActionInfo — the request body, method (`POST`), and URL are **auto-filled** ready to submit
+5. Edit any `"<required>"` fields, then click **Send** to execute the action
+6. Right-click the request body → **Send to Burp Repeater** to continue testing in Burp's native Repeater
+
+### Credential Spraying
+1. Open the **Cred Spray** tab
+2. Click **Fill from Config** to auto-populate the sessions URL from your configured host
+3. Select a vendor filter or leave as `all`
+4. Set a safe delay (≥ 500 ms recommended) to avoid account lockouts
+5. Click **Start Spray** — results appear live in the table
+6. Export findings as CSV for reporting
+
+### Running a Full Scan
+1. In the **Explorer** tab, click **Discover** then **Spider** to enumerate all endpoints
+2. Switch to the **Scanner** tab
+3. Click **Passive** or **Active** under **Scan Explorer URLs** to scan everything discovered
+4. Review findings in the **Findings** table and export as CSV / JSON / Markdown
 
 ---
 

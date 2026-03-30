@@ -423,6 +423,24 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         self._txt_req_body = JTextArea()
         self._txt_req_body.setFont(_MONO_FONT)
 
+        # Right-click context menu for the request areas
+        _req_popup = JPopupMenu()
+        _menu_send_burp = JMenuItem('Send to Burp Repeater')
+        _menu_send_burp.addActionListener(lambda e: self._on_send_to_burp_repeater())
+        _req_popup.add(_menu_send_burp)
+
+        class _ReqMouseListener(MouseAdapter):
+            def mousePressed(self_, e):
+                if e.isPopupTrigger():
+                    _req_popup.show(e.getComponent(), e.getX(), e.getY())
+            def mouseReleased(self_, e):
+                if e.isPopupTrigger():
+                    _req_popup.show(e.getComponent(), e.getX(), e.getY())
+
+        _listener = _ReqMouseListener()
+        self._txt_req_body.addMouseListener(_listener)
+        self._txt_req_headers.addMouseListener(_listener)
+
         req_tabs = JTabbedPane()
         req_tabs.addTab('Body',    JScrollPane(self._txt_req_body))
         req_tabs.addTab('Headers', JScrollPane(self._txt_req_headers))
@@ -765,6 +783,48 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
 
         self._run_in_bg(work, done)
 
+    def _on_send_to_burp_repeater(self):
+        url    = self._fld_req_url.getText().strip()
+        method = str(self._cmb_method.getSelectedItem())
+        body   = self._txt_req_body.getText().strip()
+        hdrs   = self._txt_req_headers.getText().strip()
+
+        if not url:
+            self._lbl_resp_status.setText('No URL entered.')
+            return
+
+        try:
+            from java.net import URL as _JURL
+            parsed   = _JURL(url)
+            host     = parsed.getHost()
+            port     = parsed.getPort()
+            protocol = parsed.getProtocol()
+            path     = parsed.getFile() or '/'
+            use_https = protocol.lower() == 'https'
+            if port == -1:
+                port = 443 if use_https else 80
+
+            host_hdr = host if port in (80, 443) else '{0}:{1}'.format(host, port)
+            headers = ['{0} {1} HTTP/1.1'.format(method, path)]
+            headers.append('Host: ' + host_hdr)
+            if self._token:
+                headers.append('X-Auth-Token: ' + self._token)
+            headers.append('Accept: application/json')
+            if method in ('POST', 'PATCH', 'PUT'):
+                headers.append('Content-Type: application/json')
+            for line in hdrs.splitlines():
+                line = line.strip()
+                if line and not line.startswith('#') and ':' in line:
+                    headers.append(line)
+
+            body_bytes = body.encode('utf-8') if body and method in ('POST', 'PATCH', 'PUT') else None
+            request = self._helpers.buildHttpMessage(headers, body_bytes)
+            self._callbacks.sendToRepeater(host, port, use_https, request, 'Redfisher')
+            self._log('Sent to Burp Repeater: {0} {1}'.format(method, url))
+        except Exception as ex:
+            self._lbl_resp_status.setText('Error sending to Repeater: ' + str(ex))
+            self._log('Send to Repeater error: ' + str(ex))
+
     def _do_request(self, method, url, headers_raw, body):
         """Execute HTTP request. Returns a plain dict. Runs on worker thread."""
         try:
@@ -840,6 +900,73 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         # update vendor label from response headers
         hdrs_list = [line for line in hdrs_text.splitlines() if ':' in line]
         self._update_vendor_label(hdrs_list, body_text)
+        # auto-populate request body if this is an ActionInfo response
+        action_info = self._action_info_template(body_text)
+        if action_info:
+            action_url, body_json = action_info
+            self._txt_req_body.setText(body_json)
+            self._cmb_method.setSelectedItem('POST')
+            if action_url:
+                self._fld_req_url.setText(self._build_url(action_url))
+
+    def _action_info_template(self, body_text):
+        """
+        Detects a Redfish ActionInfo response and returns (action_url, body_json).
+        action_url is inferred from @odata.id; body_json is a ready-to-submit JSON template.
+        Returns None if the response is not an ActionInfo.
+        """
+        try:
+            data = json.loads(body_text)
+        except Exception:
+            return None
+
+        if 'ActionInfo' not in data.get('@odata.type', ''):
+            return None
+
+        params = data.get('Parameters', [])
+        if not params:
+            return None
+
+        _defaults = {
+            'String':      '',
+            'StringArray': [],
+            'Integer':     0,
+            'Number':      0.0,
+            'Boolean':     False,
+            'Object':      {},
+        }
+        body = {}
+        for p in params:
+            name  = p.get('Name', '')
+            dtype = p.get('DataType', 'String')
+            if not name:
+                continue
+            # required fields get a placeholder so they stand out
+            if p.get('Required', False):
+                body[name] = '<required>' if dtype == 'String' else _defaults.get(dtype, '')
+            else:
+                body[name] = _defaults.get(dtype, '')
+
+        body_json = json.dumps(body, indent=2)
+
+        # Infer action URL from @odata.id
+        # e.g. /redfish/v1/EventService/SubmitTestEventActionInfo
+        #   -> /redfish/v1/EventService/Actions/EventService.SubmitTestEvent
+        action_url = None
+        odata_id = data.get('@odata.id', '')
+        if odata_id:
+            try:
+                segments = odata_id.rstrip('/').split('/')
+                last     = segments[-1]                   # SubmitTestEventActionInfo
+                parent   = '/'.join(segments[:-1])        # /redfish/v1/EventService
+                svc_name = segments[-2] if len(segments) >= 2 else ''  # EventService
+                if last.endswith('ActionInfo'):
+                    action_name = last[:-len('ActionInfo')]  # SubmitTestEvent
+                    action_url  = '{0}/Actions/{1}.{2}'.format(parent, svc_name, action_name)
+            except Exception:
+                pass
+
+        return action_url, body_json
 
     # ------------------------------------------------------------------
     # Explorer tab actions
