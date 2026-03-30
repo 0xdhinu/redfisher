@@ -9,9 +9,11 @@ Four-tab UI:
   Log              — all extension activity
 """
 
+import difflib
 import json
 import ssl
 import urllib2
+import uuid
 
 from burp import ISessionHandlingAction, ITab, IHttpListener
 from java.io import PrintWriter
@@ -35,6 +37,10 @@ from redfish_utils import (
 from scanner_tab import ScannerTab
 from ai_tab import AITab
 from cred_spray_tab import CredSprayTab
+from idor_tab import IDORTab
+from batch_tab import BatchTab
+from ssrf_tab import SSRFTab
+from dashboard_tab import DashboardTab
 
 _QUICK_PATHS = [
     '--- select endpoint ---',
@@ -80,6 +86,19 @@ _STATUS_COLORS = {
 }
 
 
+def _compute_diff(old_text, new_text):
+    """Return a unified-diff string between two response bodies."""
+    if not old_text:
+        return '(no previous response for this URL to diff against)'
+    old_lines = old_text.splitlines(True)
+    new_lines = new_text.splitlines(True)
+    diff = list(difflib.unified_diff(
+        old_lines, new_lines,
+        fromfile='previous', tofile='current', lineterm=''
+    ))
+    return ''.join(diff) if diff else '(responses are identical)'
+
+
 def _u(x):
     """
     Unicode-safe string coercion for Jython 2.7.
@@ -117,6 +136,16 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         self._req_history   = []   # list of {'method', 'url', 'headers', 'body', 'result'}
         self._req_hist_idx  = 0    # current position when navigating
         self._pending_hist  = {}   # snapshot of current request before sending
+
+        # Diff view: last response body per URL
+        self._last_resp_body = {}   # url -> body_text
+
+        # Bookmarks: list of Redfish paths, persisted to bookmarks.json
+        self._bookmarks = []
+        self._load_bookmarks()
+
+        # Timeline: list of {'ts', 'method', 'url', 'status', 'size'} dicts
+        self._timeline = []
 
         # Explorer state
         self._explorer_children       = {}    # parent_path → [child_path, …]; survives Discover
@@ -289,16 +318,24 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         outer = JPanel(BorderLayout())
         outer.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4))
         self._tabs = JTabbedPane()
-        self._tabs.addTab('Config',             self._build_config_tab())
-        self._tabs.addTab('Repeater', self._build_repeater_tab())
-        self._tabs.addTab('Explorer',           self._build_explorer_tab())
+        self._tabs.addTab('Config',     self._build_config_tab())
+        self._tabs.addTab('Repeater',   self._build_repeater_tab())
+        self._tabs.addTab('Explorer',   self._build_explorer_tab())
         self._scanner_tab = ScannerTab(self)
-        self._tabs.addTab('Scanner',            self._scanner_tab.get_panel())
+        self._tabs.addTab('Scanner',    self._scanner_tab.get_panel())
         self._ai_tab = AITab(self)
-        self._tabs.addTab('AI Mode',           self._ai_tab.get_panel())
+        self._tabs.addTab('AI Mode',    self._ai_tab.get_panel())
         self._cred_spray_tab = CredSprayTab(self)
-        self._tabs.addTab('Cred Spray',         self._cred_spray_tab.get_panel())
-        self._tabs.addTab('Log',                self._build_log_tab())
+        self._tabs.addTab('Cred Spray', self._cred_spray_tab.get_panel())
+        self._idor_tab = IDORTab(self)
+        self._tabs.addTab('IDOR',       self._idor_tab.get_panel())
+        self._batch_tab = BatchTab(self)
+        self._tabs.addTab('Batch',      self._batch_tab.get_panel())
+        self._ssrf_tab = SSRFTab(self, self._callbacks)
+        self._tabs.addTab('SSRF',       self._ssrf_tab.get_panel())
+        self._dashboard_tab = DashboardTab(self)
+        self._tabs.addTab('Dashboard',  self._dashboard_tab.get_panel())
+        self._tabs.addTab('Log',        self._build_log_tab())
         outer.add(self._tabs, BorderLayout.CENTER)
         return outer
 
@@ -428,6 +465,9 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         _menu_send_burp = JMenuItem('Send to Burp Repeater')
         _menu_send_burp.addActionListener(lambda e: self._on_send_to_burp_repeater())
         _req_popup.add(_menu_send_burp)
+        _menu_send_intruder = JMenuItem('Send to Burp Intruder')
+        _menu_send_intruder.addActionListener(lambda e: self._on_send_to_intruder())
+        _req_popup.add(_menu_send_intruder)
 
         class _ReqMouseListener(MouseAdapter):
             def mousePressed(self_, e):
@@ -464,9 +504,14 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         self._txt_resp_body.setFont(_MONO_FONT)
         self._txt_resp_body.setEditable(False)
 
+        self._txt_resp_diff = JTextArea()
+        self._txt_resp_diff.setFont(_MONO_FONT)
+        self._txt_resp_diff.setEditable(False)
+
         resp_tabs = JTabbedPane()
         resp_tabs.addTab('Body',    JScrollPane(self._txt_resp_body))
         resp_tabs.addTab('Headers', JScrollPane(self._txt_resp_headers))
+        resp_tabs.addTab('Diff',    JScrollPane(self._txt_resp_diff))
 
         resp_panel = JPanel(BorderLayout())
         resp_panel.setBorder(BorderFactory.createTitledBorder('Response'))
@@ -498,7 +543,8 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         # ---- top toolbar ----
         self._btn_discover   = JButton('Discover')
         self._btn_auto_walk  = JButton('Spider')
-        for _b in (self._btn_discover, self._btn_auto_walk):
+        self._btn_postman    = JButton('Export Postman')
+        for _b in (self._btn_discover, self._btn_auto_walk, self._btn_postman):
             _b.setBackground(Color(230, 100, 0))
             _b.setForeground(Color.WHITE)
             _b.setOpaque(True)
@@ -507,10 +553,13 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         self._btn_discover.addActionListener(  lambda e: self._on_discover())
         self._btn_auto_walk.addActionListener( lambda e: self._on_auto_walk())
         self._btn_auto_walk.setToolTipText('Recursively follow all @odata.id links (depth-limited)')
+        self._btn_postman.addActionListener(   lambda e: self._on_export_postman())
+        self._btn_postman.setToolTipText('Export all discovered URLs as a Postman collection')
 
         top = JPanel(FlowLayout(FlowLayout.LEFT, 6, 4))
         top.add(self._btn_discover)
         top.add(self._btn_auto_walk)
+        top.add(self._btn_postman)
         top.add(self._lbl_explorer_status)
 
         # count label — updated automatically by a ListDataListener on the model
@@ -537,10 +586,17 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         self._explorer_popup = JPopupMenu()
         menu_send_repeater   = JMenuItem('Send to Request / Response tab')
         menu_send_scanner    = JMenuItem('Send to Scanner')
+        menu_method_test     = JMenuItem('Test All HTTP Methods')
+        menu_bookmark        = JMenuItem('Bookmark this URL')
         menu_send_repeater.addActionListener(lambda e: self._explorer_send_to_repeater())
         menu_send_scanner.addActionListener( lambda e: self._explorer_send_to_scanner())
+        menu_method_test.addActionListener(  lambda e: self._explorer_test_methods())
+        menu_bookmark.addActionListener(     lambda e: self._explorer_bookmark())
         self._explorer_popup.add(menu_send_repeater)
         self._explorer_popup.add(menu_send_scanner)
+        self._explorer_popup.add(menu_method_test)
+        self._explorer_popup.addSeparator()
+        self._explorer_popup.add(menu_bookmark)
 
         class ExplorerMouseListener(MouseAdapter):
             def mousePressed(self_, e):
@@ -580,12 +636,56 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         # ---- OEM / JSON parser panel ----
         oem_panel = self._build_oem_parser_panel()
 
-        # stack the two halves vertically
-        outer_split = JSplitPane(JSplitPane.VERTICAL_SPLIT, main_split, oem_panel)
-        outer_split.setResizeWeight(0.55)
+        # ---- Bookmarks panel ----
+        bookmarks_panel = self._build_bookmarks_panel()
+
+        # stack vertically: links + detail | oem parser | bookmarks
+        inner_split = JSplitPane(JSplitPane.VERTICAL_SPLIT, main_split, oem_panel)
+        inner_split.setResizeWeight(0.55)
+        outer_split = JSplitPane(JSplitPane.VERTICAL_SPLIT, inner_split, bookmarks_panel)
+        outer_split.setResizeWeight(0.78)
 
         panel.add(top,          BorderLayout.NORTH)
         panel.add(outer_split,  BorderLayout.CENTER)
+        return panel
+
+    def _build_bookmarks_panel(self):
+        from javax.swing import DefaultListModel as _DLM
+        panel = JPanel(BorderLayout(4, 4))
+        panel.setBorder(BorderFactory.createTitledBorder('Bookmarks'))
+
+        self._bookmarks_model = DefaultListModel()
+        for path in self._bookmarks:
+            self._bookmarks_model.addElement(path)
+
+        self._lst_bookmarks = JList(self._bookmarks_model)
+        self._lst_bookmarks.setFont(_MONO_FONT)
+        self._lst_bookmarks.addListSelectionListener(
+            lambda e: self._on_bookmark_select(e)
+        )
+
+        bm_popup    = JPopupMenu()
+        bm_open     = JMenuItem('Open in Repeater')
+        bm_remove   = JMenuItem('Remove Bookmark')
+        bm_open.addActionListener(  lambda e: self._bookmark_open())
+        bm_remove.addActionListener(lambda e: self._bookmark_remove())
+        bm_popup.add(bm_open)
+        bm_popup.add(bm_remove)
+
+        class _BmMouse(MouseAdapter):
+            def mousePressed(s_, e):
+                if e.isPopupTrigger():
+                    idx = self._lst_bookmarks.locationToIndex(e.getPoint())
+                    if idx >= 0: self._lst_bookmarks.setSelectedIndex(idx)
+                    bm_popup.show(e.getComponent(), e.getX(), e.getY())
+            def mouseReleased(s_, e):
+                if e.isPopupTrigger():
+                    idx = self._lst_bookmarks.locationToIndex(e.getPoint())
+                    if idx >= 0: self._lst_bookmarks.setSelectedIndex(idx)
+                    bm_popup.show(e.getComponent(), e.getX(), e.getY())
+        self._lst_bookmarks.addMouseListener(_BmMouse())
+
+        panel.add(JScrollPane(self._lst_bookmarks), BorderLayout.CENTER)
         return panel
 
     def _build_oem_parser_panel(self):
@@ -669,8 +769,11 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
     # ------------------------------------------------------------------
 
     def _build_log_tab(self):
-        panel = JPanel(BorderLayout(4, 4))
-        panel.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6))
+        outer = JTabbedPane()
+
+        # ── Text log ─────────────────────────────────────────────────
+        log_panel = JPanel(BorderLayout(4, 4))
+        log_panel.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6))
 
         self._txt_log = JTextArea()
         self._txt_log.setFont(Font('Monospaced', Font.PLAIN, 11))
@@ -686,9 +789,54 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         btn_panel = JPanel(FlowLayout(FlowLayout.RIGHT))
         btn_panel.add(btn_clear)
 
-        panel.add(JScrollPane(self._txt_log), BorderLayout.CENTER)
-        panel.add(btn_panel,                  BorderLayout.SOUTH)
-        return panel
+        log_panel.add(JScrollPane(self._txt_log), BorderLayout.CENTER)
+        log_panel.add(btn_panel,                  BorderLayout.SOUTH)
+
+        # ── Timeline table ────────────────────────────────────────────
+        from javax.swing import JTable
+        from javax.swing.table import DefaultTableModel as _DTM
+
+        tl_panel = JPanel(BorderLayout(4, 4))
+        tl_panel.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6))
+
+        _TL_COLS = ['Timestamp', 'Method', 'URL', 'Status', 'Size (bytes)']
+
+        class _TLModel(_DTM):
+            def isCellEditable(s, r, c): return False
+
+        self._timeline_model = _TLModel(_TL_COLS, 0)
+
+        self._timeline_table = JTable(self._timeline_model)
+        self._timeline_table.setFont(Font('Monospaced', Font.PLAIN, 11))
+        self._timeline_table.setAutoResizeMode(JTable.AUTO_RESIZE_LAST_COLUMN)
+        for i, w in enumerate([160, 60, 500, 60, 90]):
+            self._timeline_table.getColumnModel().getColumn(i).setPreferredWidth(w)
+
+        btn_tl_clear = JButton('Clear Timeline')
+        btn_tl_clear.setBackground(Color(230, 100, 0))
+        btn_tl_clear.setForeground(Color.WHITE)
+        btn_tl_clear.setOpaque(True)
+        btn_tl_clear.setBorderPainted(False)
+
+        btn_tl_export = JButton('Export CSV')
+        btn_tl_export.setBackground(Color(230, 100, 0))
+        btn_tl_export.setForeground(Color.WHITE)
+        btn_tl_export.setOpaque(True)
+        btn_tl_export.setBorderPainted(False)
+
+        btn_tl_clear.addActionListener( lambda e: self._timeline_clear())
+        btn_tl_export.addActionListener(lambda e: self._timeline_export_csv())
+
+        tl_btns = JPanel(FlowLayout(FlowLayout.RIGHT))
+        tl_btns.add(btn_tl_export)
+        tl_btns.add(btn_tl_clear)
+
+        tl_panel.add(JScrollPane(self._timeline_table), BorderLayout.CENTER)
+        tl_panel.add(tl_btns,                           BorderLayout.SOUTH)
+
+        outer.addTab('Log',      log_panel)
+        outer.addTab('Timeline', tl_panel)
+        return outer
 
     # ------------------------------------------------------------------
     # Config tab actions
@@ -779,7 +927,18 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
             self._req_history.append(entry)
             if len(self._req_history) > 30:
                 self._req_history.pop(0)
-            self._req_hist_idx = len(self._req_history)  # past-end = not navigating
+            self._req_hist_idx = len(self._req_history)
+            # record timeline entry
+            import datetime as _dt
+            body_text = result.get('body', '')
+            self._timeline.append({
+                'ts':     _dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'method': method,
+                'url':    url,
+                'status': str(result.get('status') or 'ERR'),
+                'size':   str(len(body_text)),
+            })
+            self._timeline_add_row(self._timeline[-1])
 
         self._run_in_bg(work, done)
 
@@ -900,7 +1059,28 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
         # update vendor label from response headers
         hdrs_list = [line for line in hdrs_text.splitlines() if ':' in line]
         self._update_vendor_label(hdrs_list, body_text)
-        # auto-populate request body if this is an ActionInfo response
+
+        # ── diff view ────────────────────────────────────────────────
+        current_url = self._fld_req_url.getText().strip()
+        prev_body   = self._last_resp_body.get(current_url, '')
+        self._last_resp_body[current_url] = body_text
+        diff_text   = _compute_diff(prev_body, body_text)
+        self._txt_resp_diff.setText(diff_text)
+        self._txt_resp_diff.setCaretPosition(0)
+
+        # ── auto-ETag injection into request headers ──────────────────
+        try:
+            etag = json.loads(body_text).get('@odata.etag', '')
+            if etag:
+                existing = self._txt_req_headers.getText()
+                new_lines = [l for l in existing.splitlines()
+                             if not l.strip().lower().startswith('if-match')]
+                new_lines.append('If-Match: ' + etag)
+                self._txt_req_headers.setText('\n'.join(new_lines))
+        except Exception:
+            pass
+
+        # ── ActionInfo auto-fill (POST body + URL) ────────────────────
         action_info = self._action_info_template(body_text)
         if action_info:
             action_url, body_json = action_info
@@ -908,6 +1088,13 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
             self._cmb_method.setSelectedItem('POST')
             if action_url:
                 self._fld_req_url.setText(self._build_url(action_url))
+            return   # skip PATCH template when ActionInfo matched
+
+        # ── Auto-PATCH template for regular editable resources ────────
+        patch_body = self._patch_template(body_text)
+        if patch_body and str(self._cmb_method.getSelectedItem()) == 'GET':
+            self._txt_req_body.setText(patch_body)
+            self._cmb_method.setSelectedItem('PATCH')
 
     def _action_info_template(self, body_text):
         """
@@ -967,6 +1154,254 @@ class RedfishAuthHandler(ISessionHandlingAction, IHttpListener, ITab):
                 pass
 
         return action_url, body_json
+
+    def _patch_template(self, body_text):
+        """
+        For a regular Redfish resource GET response, build a minimal PATCH body
+        containing only likely-writable fields (filters @odata.*, Id, collections).
+        Returns a JSON string, or None if not applicable.
+        """
+        try:
+            data = json.loads(body_text)
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        odata_type = data.get('@odata.type', '')
+        if not odata_type:
+            return None
+        if 'ActionInfo' in odata_type or odata_type.endswith('Collection'):
+            return None
+        if 'Members' in data:
+            return None
+
+        _READONLY = frozenset([
+            '@odata.context', '@odata.etag', '@odata.id', '@odata.type',
+            'Id', 'MemberId', 'Name', 'Description', 'Status', 'Actions',
+            'Links', 'RelatedItem', 'Members', 'Members@odata.count',
+            '@Redfish.Settings', '@Redfish.ActionInfo',
+        ])
+        patch = {}
+        for k, v in data.items():
+            if k in _READONLY or k.startswith('@'):
+                continue
+            if isinstance(v, dict) and '@odata.id' in v:
+                continue
+            patch[k] = v
+        return json.dumps(patch, indent=2) if patch else None
+
+    # ------------------------------------------------------------------
+    # Send to Burp Intruder
+    # ------------------------------------------------------------------
+
+    def _on_send_to_intruder(self):
+        url    = self._fld_req_url.getText().strip()
+        method = str(self._cmb_method.getSelectedItem())
+        body   = self._txt_req_body.getText().strip()
+        hdrs   = self._txt_req_headers.getText().strip()
+        if not url:
+            return
+        try:
+            from java.net import URL as _JURL
+            parsed    = _JURL(url)
+            host      = parsed.getHost()
+            port      = parsed.getPort()
+            protocol  = parsed.getProtocol()
+            path      = parsed.getFile() or '/'
+            use_https = protocol.lower() == 'https'
+            if port == -1:
+                port = 443 if use_https else 80
+            host_hdr = host if port in (80, 443) else '{0}:{1}'.format(host, port)
+            headers  = ['{0} {1} HTTP/1.1'.format(method, path),
+                        'Host: ' + host_hdr]
+            if self._token:
+                headers.append('X-Auth-Token: ' + self._token)
+            headers.append('Accept: application/json')
+            if method in ('POST', 'PATCH', 'PUT'):
+                headers.append('Content-Type: application/json')
+            for line in hdrs.splitlines():
+                line = line.strip()
+                if line and not line.startswith('#') and ':' in line:
+                    headers.append(line)
+            body_bytes = body.encode('utf-8') if body and method in ('POST', 'PATCH', 'PUT') else None
+            request    = self._helpers.buildHttpMessage(headers, body_bytes)
+            self._callbacks.sendToIntruder(host, port, use_https, request)
+            self._log('Sent to Burp Intruder: {0} {1}'.format(method, url))
+        except Exception as ex:
+            self._log('Send to Intruder error: ' + str(ex))
+
+    # ------------------------------------------------------------------
+    # Bookmarks
+    # ------------------------------------------------------------------
+
+    def _bookmarks_file(self):
+        import inspect, os
+        lib_dir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+        return os.path.join(lib_dir, '..', 'bookmarks.json')
+
+    def _load_bookmarks(self):
+        try:
+            import os
+            path = self._bookmarks_file()
+            if os.path.exists(path):
+                with open(path, 'r') as f:
+                    self._bookmarks = json.load(f)
+        except Exception:
+            self._bookmarks = []
+
+    def _save_bookmarks(self):
+        try:
+            with open(self._bookmarks_file(), 'w') as f:
+                json.dump(self._bookmarks, f, indent=2)
+        except Exception:
+            pass
+
+    def _explorer_bookmark(self):
+        entry = self._ctx_menu_entry
+        if not entry:
+            return
+        path = explorer_actual_path(entry)
+        if path not in self._bookmarks:
+            self._bookmarks.append(path)
+            self._save_bookmarks()
+            def upd():
+                self._bookmarks_model.addElement(path)
+            SwingUtilities.invokeLater(upd)
+
+    def _on_bookmark_select(self, event):
+        pass  # selection handled by right-click menu
+
+    def _bookmark_open(self):
+        path = self._lst_bookmarks.getSelectedValue()
+        if not path:
+            return
+        self._fld_req_url.setText(self._build_url(str(path)))
+        self._cmb_method.setSelectedItem('GET')
+        self._refresh_req_headers()
+        self._tabs.setSelectedIndex(1)
+
+    def _bookmark_remove(self):
+        path = self._lst_bookmarks.getSelectedValue()
+        if not path:
+            return
+        path = str(path)
+        if path in self._bookmarks:
+            self._bookmarks.remove(path)
+            self._save_bookmarks()
+        def upd():
+            self._bookmarks_model.removeElement(path)
+        SwingUtilities.invokeLater(upd)
+
+    # ------------------------------------------------------------------
+    # Timeline helpers
+    # ------------------------------------------------------------------
+
+    def _timeline_add_row(self, entry):
+        def upd():
+            try:
+                self._timeline_model.addRow([
+                    entry['ts'], entry['method'], entry['url'],
+                    entry['status'], entry['size'],
+                ])
+            except Exception:
+                pass
+        SwingUtilities.invokeLater(upd)
+
+    def _timeline_clear(self):
+        self._timeline = []
+        self._timeline_model.setRowCount(0)
+
+    def _timeline_export_csv(self):
+        from javax.swing import JFileChooser
+        import java.io
+        chooser = JFileChooser()
+        chooser.setDialogTitle('Save Timeline CSV')
+        if chooser.showSaveDialog(self._panel) != JFileChooser.APPROVE_OPTION:
+            return
+        path = chooser.getSelectedFile().getAbsolutePath()
+        if not path.endswith('.csv'):
+            path += '.csv'
+        def _q(v):
+            s = '' if v is None else str(v)
+            return '"' + s.replace('"', '""') + '"' if (',' in s or '"' in s) else s
+        fw = java.io.FileWriter(path)
+        try:
+            fw.write(','.join(['Timestamp', 'Method', 'URL', 'Status', 'Size']) + '\n')
+            for e in self._timeline:
+                fw.write(','.join([_q(e['ts']), _q(e['method']), _q(e['url']),
+                                   _q(e['status']), _q(e['size'])]) + '\n')
+        finally:
+            fw.close()
+        self._log('Timeline exported to ' + path)
+
+    # ------------------------------------------------------------------
+    # Postman Collection Export
+    # ------------------------------------------------------------------
+
+    def _on_export_postman(self):
+        from javax.swing import JFileChooser
+        import java.io
+        chooser = JFileChooser()
+        chooser.setDialogTitle('Export Postman Collection')
+        if chooser.showSaveDialog(self._panel) != JFileChooser.APPROVE_OPTION:
+            return
+        path = chooser.getSelectedFile().getAbsolutePath()
+        if not path.endswith('.json'):
+            path += '.json'
+
+        items = []
+        for i in range(self._explorer_model.size()):
+            entry = _u(self._explorer_model.get(i))
+            ep    = explorer_actual_path(entry)
+            full  = self._build_url(ep)
+            item  = {
+                'name': ep,
+                'request': {
+                    'method': 'GET',
+                    'header': [
+                        {'key': 'Accept',       'value': 'application/json'},
+                        {'key': 'X-Auth-Token', 'value': self._token or ''},
+                    ],
+                    'url': {'raw': full, 'host': [full]},
+                },
+                'response': [],
+            }
+            items.append(item)
+
+        collection = {
+            'info': {
+                'name':   'Redfisher — {0}'.format(self._host or 'export'),
+                '_postman_id': str(uuid.uuid4()),
+                'schema': 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
+            },
+            'item': items,
+        }
+        fw = java.io.FileWriter(path)
+        try:
+            fw.write(json.dumps(collection, indent=2))
+        finally:
+            fw.close()
+        self._log('Postman collection exported: {0} items to {1}'.format(len(items), path))
+
+    # ------------------------------------------------------------------
+    # HTTP Method Tampering (from Explorer right-click)
+    # ------------------------------------------------------------------
+
+    def _explorer_test_methods(self):
+        entry = self._ctx_menu_entry
+        if not entry:
+            return
+        full_url = self._build_url(explorer_actual_path(entry))
+        # send the URL to the SSRF tab's method-tampering panel and switch to it
+        try:
+            self._ssrf_tab._fld_method_url.setText(full_url)
+            # find SSRF tab index
+            for i in range(self._tabs.getTabCount()):
+                if self._tabs.getTitleAt(i) == 'SSRF':
+                    self._tabs.setSelectedIndex(i)
+                    break
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Explorer tab actions

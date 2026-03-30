@@ -9,6 +9,7 @@ Provides:
 """
 
 import json
+import datetime
 
 from java.lang import Boolean, String, Thread, Runnable
 from javax.swing import (
@@ -20,6 +21,7 @@ from javax.swing.table import DefaultTableModel, DefaultTableCellRenderer
 from java.awt import BorderLayout, FlowLayout, Color, Font, Component
 
 import scanner as _scanner  # module-level signature store
+import cve_db as _cve_db
 from redfish_utils import EXPLORER_CHILD_PREFIX, explorer_actual_path
 
 _MONO = Font('Monospaced', Font.PLAIN, 12)
@@ -353,11 +355,14 @@ class ScannerTab(object):
         panel = JPanel(BorderLayout())
         panel.setBorder(BorderFactory.createTitledBorder('Findings'))
 
-        btn_clear      = JButton('Clear')
-        btn_export_csv = JButton('Export CSV')
-        btn_export_json = JButton('Export JSON')
-        btn_export_md  = JButton('Export Markdown')
-        for _b in (btn_clear, btn_export_csv, btn_export_json, btn_export_md):
+        btn_clear        = JButton('Clear')
+        btn_export_csv   = JButton('Export CSV')
+        btn_export_json  = JButton('Export JSON')
+        btn_export_md    = JButton('Export Markdown')
+        btn_export_html  = JButton('Export HTML Report')
+        btn_cve_check    = JButton('CVE Check (Firmware)')
+        for _b in (btn_clear, btn_export_csv, btn_export_json, btn_export_md,
+                   btn_export_html, btn_cve_check):
             _b.setBackground(Color(230, 100, 0))
             _b.setForeground(Color.WHITE)
             _b.setOpaque(True)
@@ -366,7 +371,11 @@ class ScannerTab(object):
         btn_export_csv.addActionListener(  lambda e: self._export_findings('csv'))
         btn_export_json.addActionListener( lambda e: self._export_findings('json'))
         btn_export_md.addActionListener(   lambda e: self._export_findings('markdown'))
+        btn_export_html.addActionListener( lambda e: self._export_findings('html'))
+        btn_cve_check.addActionListener(   lambda e: self._run_cve_check())
         top = JPanel(FlowLayout(FlowLayout.RIGHT))
+        top.add(btn_cve_check)
+        top.add(btn_export_html)
         top.add(btn_export_md)
         top.add(btn_export_json)
         top.add(btn_export_csv)
@@ -573,6 +582,113 @@ class ScannerTab(object):
 
         self._run_in_bg(work, done)
 
+    # ------------------------------------------------------------------
+    # Export findings
+    # ------------------------------------------------------------------
+
+    def _export_findings(self, fmt):
+        from javax.swing import JFileChooser
+        import java.io
+
+        ext_map = {'csv': '.csv', 'json': '.json', 'markdown': '.md', 'html': '.html'}
+        chooser = JFileChooser()
+        chooser.setDialogTitle('Export Findings as {0}'.format(fmt.upper()))
+        if chooser.showSaveDialog(self._find_table) != JFileChooser.APPROVE_OPTION:
+            return
+        path = chooser.getSelectedFile().getAbsolutePath()
+        if not path.endswith(ext_map.get(fmt, '')):
+            path += ext_map.get(fmt, '')
+
+        model   = self._find_model
+        cols    = [str(model.getColumnName(c)) for c in range(model.getColumnCount())]
+        rows    = []
+        for r in range(model.getRowCount()):
+            rows.append({cols[c]: str(model.getValueAt(r, c) or '') for c in range(len(cols))})
+
+        fw = java.io.FileWriter(path)
+        try:
+            if fmt == 'csv':
+                def _q(v):
+                    return '"' + v.replace('"', '""') + '"' if (',' in v or '"' in v or '\n' in v) else v
+                fw.write(','.join(_q(c) for c in cols) + '\n')
+                for row in rows:
+                    fw.write(','.join(_q(row[c]) for c in cols) + '\n')
+
+            elif fmt == 'json':
+                fw.write(json.dumps(rows, indent=2))
+
+            elif fmt == 'markdown':
+                fw.write('| ' + ' | '.join(cols) + ' |\n')
+                fw.write('| ' + ' | '.join(['---'] * len(cols)) + ' |\n')
+                for row in rows:
+                    fw.write('| ' + ' | '.join(row[c].replace('|', '\\|') for c in cols) + ' |\n')
+
+            elif fmt == 'html':
+                fw.write(_build_html_report(rows, self._auth._host if hasattr(self, '_auth') else ''))
+        finally:
+            fw.close()
+
+        self._set_scan_status(
+            'Exported {0} finding(s) to {1}'.format(len(rows), path),
+            Color(50, 150, 50)
+        )
+
+    # ------------------------------------------------------------------
+    # CVE cross-reference
+    # ------------------------------------------------------------------
+
+    def _run_cve_check(self):
+        """
+        Collect firmware version strings from the Explorer model and
+        cross-reference against the offline CVE database.
+        Appends any matches as Info/High findings in the findings table.
+        """
+        import re as _re
+        model    = self._auth._explorer_model
+        vendor   = self._auth._lbl_vendor.getText().replace('Vendor: ', '')
+        vh_lower = vendor.lower()
+
+        # Heuristic: look for version-like strings in Explorer entries
+        ver_pattern = _re.compile(r'(\d+\.\d+[\.\d]*)')
+        candidates  = set()
+        for i in range(model.size()):
+            entry = str(model.get(i))
+            for m in ver_pattern.findall(entry):
+                candidates.add(m)
+
+        # Also check the log for version strings
+        try:
+            log_text = self._auth._txt_log.getText()
+            for m in ver_pattern.findall(log_text):
+                candidates.add(m)
+        except Exception:
+            pass
+
+        if not candidates:
+            self._set_scan_status('CVE check: no version strings found in Explorer.', Color(100, 100, 100))
+            return
+
+        hits = _cve_db.lookup_all([(v, vh_lower) for v in candidates])
+        if not hits:
+            self._set_scan_status('CVE check: no matches found for detected versions.', Color(100, 100, 100))
+            return
+
+        for h in hits:
+            self._find_model.add_finding({
+                'sig_id':     h['cve'],
+                'name':       h['summary'],
+                'url':        self._auth._build_url('/redfish/v1/UpdateService/FirmwareInventory'),
+                'severity':   'High' if float(h['cvss']) >= 7.0 else 'Medium',
+                'confidence': 'Firm',
+                'detail':     'CVSS {0} | Affected: {1} | Remediation: {2}'.format(
+                                  h['cvss'], h['affected'], h['remediation']),
+            })
+        self._bottom_tabs.setSelectedIndex(1)
+        self._set_scan_status(
+            'CVE check: {0} match(es) added to findings.'.format(len(hits)),
+            Color(200, 50, 50)
+        )
+
     def _set_scan_status(self, msg, color):
         def update():
             self._lbl_scan_status.setForeground(color)
@@ -588,3 +704,79 @@ class ScannerTab(object):
                         done_fn(result)
                 SwingUtilities.invokeLater(Updater())
         Thread(Worker()).start()
+
+
+# ---------------------------------------------------------------------------
+# HTML report helper
+# ---------------------------------------------------------------------------
+
+_SEV_BADGE = {
+    'High':     '#dc3232',
+    'Critical': '#8b0000',
+    'Medium':   '#e07b00',
+    'Low':      '#2b7fd4',
+    'Info':     '#666666',
+}
+
+
+def _build_html_report(rows, host=''):
+    ts   = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+    cols = ['sig_id', 'name', 'url', 'severity', 'confidence', 'detail'] \
+           if rows and 'sig_id' in rows[0] \
+           else (list(rows[0].keys()) if rows else [])
+
+    sev_order = {'Critical': 0, 'High': 1, 'Medium': 2, 'Low': 3, 'Info': 4}
+    rows = sorted(rows, key=lambda r: sev_order.get(r.get('severity', r.get('Severity', '')), 5))
+
+    def _esc(s):
+        return (s.replace('&', '&amp;').replace('<', '&lt;')
+                 .replace('>', '&gt;').replace('"', '&quot;'))
+
+    finding_rows = ''
+    for r in rows:
+        sev   = r.get('severity', r.get('Severity', 'Info'))
+        color = _SEV_BADGE.get(sev, '#666666')
+        cells = ''.join(
+            '<td style="padding:6px 10px;border-bottom:1px solid #eee">{0}</td>'.format(
+                '<span style="background:{0};color:#fff;padding:2px 7px;border-radius:3px;'
+                'font-size:11px">{1}</span>'.format(color, _esc(sev))
+                if k in ('severity', 'Severity') else _esc(str(r.get(k, '')))
+            )
+            for k in cols
+            for _ in [r.get(k, r.get(k, ''))]
+        )
+        finding_rows += '<tr>{0}</tr>\n'.format(cells)
+
+    header_cells = ''.join(
+        '<th style="padding:8px 10px;background:#f0f0f0;text-align:left;'
+        'border-bottom:2px solid #ccc">{0}</th>'.format(_esc(c)) for c in cols
+    )
+
+    return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Redfisher Security Report — {host}</title>
+<style>
+  body  {{ font-family: Arial, sans-serif; margin: 30px; color: #222; }}
+  h1    {{ color: #e66000; }}
+  table {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
+  tr:hover td {{ background: #fafafa; }}
+  .meta {{ color: #666; font-size: 12px; margin-bottom: 20px; }}
+</style>
+</head>
+<body>
+<h1>Redfisher Security Assessment Report</h1>
+<p class="meta">Target: <b>{host}</b> &nbsp;|&nbsp; Generated: {ts} &nbsp;|&nbsp; Findings: {count}</p>
+<table>
+  <thead><tr>{header}</tr></thead>
+  <tbody>{body}</tbody>
+</table>
+</body>
+</html>'''.format(
+        host=_esc(host or 'unknown'),
+        ts=ts,
+        count=len(rows),
+        header=header_cells,
+        body=finding_rows,
+    )

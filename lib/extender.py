@@ -22,7 +22,7 @@ from scanner import RedfishScannerCheck
 from auth_handler import RedfishAuthHandler
 
 EXTENSION_NAME = 'Redfisher API Tester'
-VERSION        = '1.0.0'
+VERSION        = '2.0.0'
 
 # signatures.json lives one level above lib/
 _LIB_DIR   = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
